@@ -1,0 +1,1 @@
+python -c "import pandas as pd; df = pd.read_excel('Cuestionario_ServBCP (Carta Fianza) - Noviembre.xlsx', sheet_name='BD'); print('Registros por pais:'); print(df['PAIS'].value_counts())"
