@@ -1,3 +1,6 @@
+problmmatica
+Contexto: Actualmente, el proceso de validación para determinar si se ha prestado el servicio de "Carta Fianza" a clientes corporativos implica el cruce de información entre dos fuentes: un reporte externo (Excel de solicitud) y la Base de Datos interna (Query BD).
+
 # Carta Fianza - Procesador de Excel
 
 Script para comparar nombres de empresas entre hojas de Excel usando fuzzy matching.
