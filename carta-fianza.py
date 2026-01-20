@@ -5,7 +5,7 @@ import re
 # ==========================================
 # CONFIGURACION DE ARCHIVOS Y HOJAS
 # ==========================================
-NOMBRE_ARCHIVO = 'Cuestionario_ServBCP (Carta Fianza) - Noviembre.xlsx'
+NOMBRE_ARCHIVO = 'Carta_Fianza_Plantilla.xlsx'
 HOJA_INPUT = 'Credicorp'
 HOJA_BD = 'BD'
 
@@ -62,17 +62,22 @@ def buscar_match(row):
     lista_candidatos = bd_filtrada['Cliente_Limpio'].unique()
     
     if len(lista_candidatos) == 0:
-        return "SIN DATA EN PAIS", 0
+        return "SIN DATA EN PAIS", 0, ""
     
     # Buscamos el nombre mas parecido
     resultado = process.extractOne(nombre_buscado, choices=lista_candidatos, scorer=fuzz.token_sort_ratio)
     if resultado is None:
-        return "SIN COINCIDENCIA", 0
+        return "SIN COINCIDENCIA", 0, ""
     mejor_match, puntaje = resultado
-    return mejor_match, puntaje
+    
+    # Obtenemos el CODUNICOCLI del mejor match
+    registro_bd = bd_filtrada[bd_filtrada['Cliente_Limpio'] == mejor_match].iloc[0]
+    codunicocli = registro_bd['CODUNICOCLI']
+    
+    return mejor_match, puntaje, codunicocli
 
-# Ejecutamos la búsqueda fila por fila
-df_input[['MATCH_EN_BD', 'PORCENTAJE']] = df_input.apply(
+# Ejecutamos la busqueda fila por fila
+df_input[['MATCH_EN_BD', 'PORCENTAJE', 'CODUNICOCLI_BD']] = df_input.apply(
     lambda x: pd.Series(buscar_match(x)), axis=1
 )
 
@@ -88,18 +93,23 @@ def obtener_color(puntaje):
 
 df_input['SEMAFORO'] = df_input['PORCENTAJE'].apply(obtener_color)
 
-# Seleccionamos las columnas que pide tu reporte + Las de validacion
-# Usamos los nombres exactos que me diste para la hoja Reporte
-cols_reporte = [
-    'Pais', 
-    'Nombre de la empresa', 
-    'IDC', 
-    'Nemonico', 
-    'Se ha prestado servicio de carta fianza?'
-]
+# Creamos el DataFrame final con las columnas del reporte
+df_final = pd.DataFrame()
+df_final['Pais'] = df_input['Pais']
+df_final['Nombre de la empresa'] = df_input['Nombre de la empresa']
 
-# Creamos el DataFrame final con las columnas originales + Resultados
-df_final = df_input[cols_reporte].copy()
+# IDC: Si es VERDE, poner el CODUNICOCLI de la BD, si no, dejar el original
+df_final['IDC'] = df_input.apply(
+    lambda row: row['CODUNICOCLI_BD'] if row['SEMAFORO'] == 'VERDE' else row['IDC'], axis=1
+)
+
+df_final['Nemonico'] = df_input['Nemonico']
+
+# Se ha prestado carta fianza: SI cuando es VERDE, vacio en otros casos
+df_final['Se ha prestado servicio de carta fianza?'] = df_input['SEMAFORO'].apply(
+    lambda x: 'SI' if x == 'VERDE' else ''
+)
+
 df_final['NOMBRE_ENCONTRADO_BD'] = df_input['MATCH_EN_BD']
 df_final['%_COINCIDENCIA'] = df_input['PORCENTAJE']
 df_final['ESTADO'] = df_input['SEMAFORO']
