@@ -5,7 +5,7 @@ import re
 # ==========================================
 # PARAMETRIZACION DE ARCHIVOS Y HOJAS
 # ==========================================
-NOMBRE_ARCHIVO = 'Carta_Fianza_Plantilla.xlsx'
+NOMBRE_ARCHIVO = 'prueba.xlsx'
 HOJA_INPUT = 'Credicorp'
 HOJA_BD = 'BD'
 
@@ -63,92 +63,166 @@ df_bd = df_bd[df_bd['Cliente_Limpio'] != ''].copy()
 # ==========================================
 print("Buscando coincidencias en la Base de Datos...")
 
-def calcular_similitud_palabras(nombre1, nombre2):
+# Palabras comunes que NO identifican a una empresa (stopwords)
+STOPWORDS = {
+    # Sufijos legales
+    'sa', 'sac', 'saa', 'eirl', 'ltd', 'inc', 'spa', 'corp', 'group', 'grupo',
+    # Articulos y preposiciones
+    'de', 'del', 'la', 'el', 'los', 'las', 'y', 'e', 'en', 'a', 'the', 'of',
+    # Paises
+    'peru', 'chile', 'colombia', 'bolivia', 'panama', 'per', 'chi', 'col', 'brasil', 'mexico',
+    # Tipos de empresa genericos
+    'empresa', 'empresas', 'compania', 'sociedad', 'corporacion', 'inversiones', 'holding', 'holdings',
+    'banco', 'bank', 'financial', 'financiera', 'financiero',
+    # Sectores/industrias (muy genericos)
+    'minera', 'mineras', 'minas', 'mineros', 'mining',
+    'energia', 'energy', 'generacion', 'distribucion', 'electrica', 'electric',
+    'construccion', 'construcciones', 'constructora',
+    'servicios', 'service', 'services', 'comercial', 'industrial',
+    'retail', 'internacional', 'international', 'sucursal',
+    # Otras palabras genericas que causan falsos positivos
+    'diagnostico', 'instituto', 'interconexion', 'operadores', 'operador',
+    'open', 'plaza', 'mall', 'centro', 'tienda', 'tiendas'
+}
+
+def extraer_palabras_clave(nombre):
+    """Extrae las palabras significativas de un nombre (no stopwords)."""
+    palabras = nombre.lower().split()
+    # Filtrar stopwords y palabras muy cortas
+    clave = [p for p in palabras if p not in STOPWORDS and len(p) >= 3]
+    return clave
+
+def obtener_palabra_distintiva(palabras_clave):
     """
-    Calcula similitud basada en palabras compartidas.
-    Penaliza cuando no hay palabras en comun.
+    Obtiene la palabra MAS distintiva (la mas larga y unica).
+    Esta es la que DEBE coincidir para un match alto.
     """
-    palabras1 = set(nombre1.split())
-    palabras2 = set(nombre2.split())
+    if not palabras_clave:
+        return None
+    # La palabra mas larga suele ser la mas distintiva
+    return max(palabras_clave, key=len)
+
+def calcular_score_avanzado(nombre_input, nombre_bd):
+    """
+    Calcula un score de similitud mas inteligente.
+    Prioriza coincidencias de palabras clave distintivas.
+    """
+    palabras_input = extraer_palabras_clave(nombre_input)
+    palabras_bd = extraer_palabras_clave(nombre_bd)
     
-    # Quitamos palabras muy cortas (de, el, la, etc.)
-    palabras1 = {p for p in palabras1 if len(p) > 2}
-    palabras2 = {p for p in palabras2 if len(p) > 2}
+    if not palabras_input or not palabras_bd:
+        return 0, False
     
-    if not palabras1 or not palabras2:
-        return 0
+    # Palabra distintiva del input (la mas importante)
+    palabra_distintiva = obtener_palabra_distintiva(palabras_input)
     
-    # Palabras exactas en comun
-    comunes = palabras1 & palabras2
-    if comunes:
-        return len(comunes) / max(len(palabras1), len(palabras2)) * 100
+    # 1. Buscar palabras clave exactas en comun
+    comunes_exactas = set(palabras_input) & set(palabras_bd)
     
-    # Si no hay palabras exactas, buscar palabras parciales (que empiecen igual)
-    parciales = 0
-    for p1 in palabras1:
-        for p2 in palabras2:
-            # Si una palabra contiene a la otra o viceversa (minimo 4 chars)
-            if len(p1) >= 4 and len(p2) >= 4:
-                if p1.startswith(p2[:4]) or p2.startswith(p1[:4]):
-                    parciales += 1
+    # 2. Verificar si la palabra distintiva coincide EXACTAMENTE
+    distintiva_coincide_exacta = palabra_distintiva in comunes_exactas if palabra_distintiva else False
+    
+    # 3. Verificar coincidencia parcial de palabra distintiva (prefijo 5+ chars)
+    distintiva_coincide_parcial = False
+    if palabra_distintiva and not distintiva_coincide_exacta:
+        for p_bd in palabras_bd:
+            if len(palabra_distintiva) >= 5 and len(p_bd) >= 5:
+                if palabra_distintiva[:5] == p_bd[:5]:
+                    distintiva_coincide_parcial = True
                     break
     
-    return parciales / max(len(palabras1), len(palabras2)) * 50  # Max 50% por parciales
+    # 4. Buscar coincidencias parciales de otras palabras
+    comunes_parciales = 0
+    for p_in in palabras_input:
+        if p_in in comunes_exactas:
+            continue
+        for p_bd in palabras_bd:
+            if p_bd in comunes_exactas:
+                continue
+            min_len = min(len(p_in), len(p_bd))
+            if min_len >= 4:
+                prefijo = min(4, min_len)
+                if p_in[:prefijo] == p_bd[:prefijo]:
+                    comunes_parciales += 0.5
+                    break
+    
+    total_comunes = len(comunes_exactas) + comunes_parciales
+    max_palabras = max(len(palabras_input), len(palabras_bd))
+    
+    # Score base por palabras clave
+    score_palabras = (total_comunes / max_palabras) * 100 if max_palabras > 0 else 0
+    
+    # BONUS/PENALIZACION por palabra distintiva
+    if distintiva_coincide_exacta:
+        score_palabras = min(100, score_palabras + 30)  # Bonus grande
+    elif distintiva_coincide_parcial:
+        score_palabras = min(100, score_palabras + 15)  # Bonus medio
+    else:
+        # PENALIZAR si la palabra distintiva NO coincide
+        score_palabras = score_palabras * 0.6  # Penalizacion fuerte
+    
+    return score_palabras, distintiva_coincide_exacta
 
 def buscar_match(row):
     nombre_buscado = row['Empresa_Limpia']
     
-    if not nombre_buscado:
-        return "SIN DATA", 0, "", ""
+    if not nombre_buscado or len(nombre_buscado.strip()) < 2:
+        return "SIN DATA", 0, "", "", False
     
-    lista_candidatos = df_bd['Cliente_Limpio'].unique()
+    lista_candidatos = df_bd['Cliente_Limpio'].unique().tolist()
     if len(lista_candidatos) == 0:
-        return "SIN DATA", 0, "", ""
+        return "SIN DATA", 0, "", "", False
 
-    # Paso 1: Obtener top 5 candidatos con ratio basico
+    # PASO 1: Obtener top 30 candidatos usando token_set_ratio
     top_candidatos = process.extract(
         nombre_buscado, 
         choices=lista_candidatos, 
-        scorer=fuzz.ratio,  # Comparacion directa caracter por caracter
-        limit=5
+        scorer=fuzz.token_set_ratio,
+        limit=30
     )
     
     if not top_candidatos:
-        return "SIN COINCIDENCIA", 0, "", ""
+        return "SIN COINCIDENCIA", 0, "", "", False
     
-    # Paso 2: Re-evaluar con nuestra logica de palabras
+    # Obtener palabra distintiva del input para verificar si es corta
+    palabras_input = extraer_palabras_clave(nombre_buscado)
+    palabra_distintiva = obtener_palabra_distintiva(palabras_input)
+    palabra_distintiva_corta = palabra_distintiva and len(palabra_distintiva) < 4
+    
+    # PASO 2: Re-evaluar con nuestro score de palabras clave
     mejor_match = None
     mejor_puntaje = 0
+    mejor_distintiva = False
     
     for candidato, puntaje_fuzz in top_candidatos:
-        # Calcular similitud por palabras compartidas
-        puntaje_palabras = calcular_similitud_palabras(nombre_buscado, candidato)
+        # Calcular score por palabras clave
+        score_palabras, distintiva_coincide = calcular_score_avanzado(nombre_buscado, candidato)
         
-        # Puntaje combinado: 40% fuzzy + 60% palabras
-        puntaje_final = (puntaje_fuzz * 0.4) + (puntaje_palabras * 0.6)
+        # Puntaje combinado: 40% fuzzy token_set + 60% palabras clave
+        puntaje_final = (puntaje_fuzz * 0.4) + (score_palabras * 0.6)
         
-        # Penalizacion si el candidato es mucho mas corto
-        ratio_longitud = len(candidato) / len(nombre_buscado) if len(nombre_buscado) > 0 else 0
-        if ratio_longitud < 0.5:  # Si el candidato es menos de la mitad de largo
-            puntaje_final *= 0.5  # Penalizar 50%
+        # BONUS si palabra distintiva coincide exacta
+        if distintiva_coincide:
+            puntaje_final = min(100, puntaje_final + 10)
         
         if puntaje_final > mejor_puntaje:
             mejor_puntaje = puntaje_final
             mejor_match = candidato
+            mejor_distintiva = distintiva_coincide
     
-    if mejor_match is None or mejor_puntaje < 10:
-        return "SIN COINCIDENCIA", 0, "", ""
+    if mejor_match is None or mejor_puntaje < 15:
+        return "SIN COINCIDENCIA", 0, "", "", False
 
-    # Recuperamos el registro original
+    # Recuperamos el registro original de la BD
     registro_bd = df_bd[df_bd['Cliente_Limpio'] == mejor_match].iloc[0]
     cliente_original = registro_bd['CLIENTE']
     codunicocli = registro_bd['CODUNICOCLI'] if 'CODUNICOCLI' in registro_bd else ""
     pais_match = registro_bd['PAIS_BD']
 
-    return cliente_original, int(mejor_puntaje), codunicocli, pais_match
+    return cliente_original, int(mejor_puntaje), codunicocli, pais_match, palabra_distintiva_corta
 
 # Ejecutamos la busqueda fila por fila
-df_input[['MATCH_EN_BD', 'PORCENTAJE', 'CODUNICOCLI_BD', 'PAIS_MATCH']] = df_input.apply(
+df_input[['MATCH_EN_BD', 'PORCENTAJE', 'CODUNICOCLI_BD', 'PAIS_MATCH', 'DISTINTIVA_CORTA']] = df_input.apply(
     lambda x: pd.Series(buscar_match(x)), axis=1
 )
 
@@ -157,16 +231,35 @@ df_input[['MATCH_EN_BD', 'PORCENTAJE', 'CODUNICOCLI_BD', 'PAIS_MATCH']] = df_inp
 # ==========================================
 print("Armando el reporte final...")
 
-def obtener_color(puntaje):
-    # <<< CORREGIDO: usar >= (Python) en vez de &gt;= (HTML)
-    if puntaje >= 85:
+def obtener_color(puntaje, palabra_distintiva_corta=False, pais_coincide=True):
+    # VERDE: Solo si estamos MUY seguros (>= 95%) Y el pais coincide
+    # MORADO: Revisar manualmente (50-94% O pais diferente)
+    # ROJO: No encontrado (< 50%)
+    
+    # Si el pais NO coincide, forzar MORADO para revision manual
+    # (puede ser la misma empresa con sucursal en otro pais, necesita validacion)
+    if not pais_coincide and puntaje >= 50:
+        return 'MORADO'  # Pais diferente, requiere revision
+    
+    # Si la palabra distintiva es muy corta (<4 chars), forzar MORADO
+    # EXCEPTO si es match perfecto (100%)
+    if puntaje >= 100:
+        return 'VERDE'  # Match perfecto con pais correcto
+    elif puntaje >= 95:
+        if palabra_distintiva_corta:
+            return 'MORADO'  # Palabra muy corta, requiere revision
         return 'VERDE'
     elif puntaje >= 50:
         return 'MORADO'
     else:
         return 'ROJO'
 
-df_input['SEMAFORO'] = df_input['PORCENTAJE'].apply(obtener_color)
+# Verificar si el pais del input coincide con el pais del match
+df_input['PAIS_COINCIDE'] = df_input['Pais_Norm'] == df_input['PAIS_MATCH']
+
+df_input['SEMAFORO'] = df_input.apply(
+    lambda row: obtener_color(row['PORCENTAJE'], row['DISTINTIVA_CORTA'], row['PAIS_COINCIDE']), axis=1
+)
 
 # Creamos el DataFrame final con las columnas del reporte
 df_final = pd.DataFrame()
@@ -180,9 +273,9 @@ df_final['IDC'] = df_input.apply(
 
 df_final['Nemonico'] = df_input.get('Nemonico', '')
 
-# Se ha prestado carta fianza: SI cuando es VERDE, vacío en otros casos
+# Se ha prestado carta fianza: SI cuando es VERDE, NO cuando es ROJO, vacio en MORADO
 df_final['Se ha prestado servicio de carta fianza?'] = df_input['SEMAFORO'].apply(
-    lambda x: 'SI' if x == 'VERDE' else ''
+    lambda x: 'SI' if x == 'VERDE' else ('NO' if x == 'ROJO' else '')
 )
 
 df_final['NOMBRE_ENCONTRADO_BD'] = df_input['MATCH_EN_BD']
